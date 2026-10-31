@@ -38,3 +38,15 @@ jobs:
           echo '{"b":1,"a":2}' | node src/cli.js format --sort-keys
           node src/cli.js map examples/mapping.json examples/sample.json > /dev/null
           node src/cli.js validate examples/sample.json
+          node src/cli.js get 'positionen[?(@.menge > 1)].sku' examples/sample.json --raw
+
+      - name: Neue Befehle (0.2.0)
+        run: |
+          echo '{"a":{"b":1}}' | node src/cli.js set 'a.c' 2 --minify
+          echo '{"a":{"b":1}}' | node src/cli.js del 'a.b' --minify
+          echo '{"a":{"b":1}}' | node src/cli.js flatten --minify
+          echo '{"a.b":1}' | node src/cli.js unflatten --minify
+          printf '{"a":1}\n{"a":2}\n' | node src/cli.js validate --jsonl
+          printf '{ // c\n "a": 1,\n}\n' | node src/cli.js format --jsonc --minify
+          node src/cli.js diff examples/sample.json examples/mapping.json > /dev/null || test $? -eq 1
+          echo '{"a":1}' | node src/cli.js merge examples/mapping.json --minify
