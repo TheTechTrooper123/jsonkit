@@ -2,22 +2,34 @@
 /**
  * jsonkit CLI
  *
- *   jsonkit format [datei] [--indent N | --tabs] [--sort-keys] [--minify] [-o datei]
- *   jsonkit get <pfad> [datei] [--raw] [--minify]
- *   jsonkit map <spec.json> [datei] [--indent N] [--sort-keys] [--strict] [-o datei]
- *   jsonkit validate [datei]
+ *   jsonkit format [datei] [--indent N | --tabs] [--sort-keys] [--minify] [--jsonl] [--jsonc]
+ *   jsonkit get <pfad> [datei] [--raw]
+ *   jsonkit map <spec.json> [datei] [--strict | --null]
+ *   jsonkit validate [datei] [--jsonl]
+ *   jsonkit set <pfad> <wert> [datei] [--string]
+ *   jsonkit del <pfad> [datei]
+ *   jsonkit keys [pfad] [datei] [--raw]
+ *   jsonkit flatten [datei] [--separator .]
+ *   jsonkit unflatten [datei] [--separator .]
+ *   jsonkit diff <a.json> <b.json>
+ *   jsonkit merge <patch.json> [datei] [--arrays replace|concat|merge]
  *
  * Ohne Datei (oder mit "-") wird von stdin gelesen.
- * Exit-Codes: 0 = ok, 1 = ungültiges JSON / Fehler, 2 = Bedienfehler.
+ * Exit-Codes: 0 = ok, 1 = ungültiges JSON / Unterschied / Fehler, 2 = Bedienfehler.
  */
 
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { JsonSyntaxError, parseJson } from './parse.js';
 import { stringifyJson } from './format.js';
 import { mapDocument } from './map.js';
-import { queryPath } from './path.js';
+import { isPlainObject, queryPath } from './path.js';
+import { deletePath, flattenJson, setPath, unflattenJson } from './mutate.js';
+import { diffJson } from './diff.js';
+import { mergeJson } from './merge.js';
+import { parseJsonc } from './jsonc.js';
+import { parseJsonl, stringifyJsonl } from './jsonl.js';
 
 const BOOLEAN_FLAGS = new Set([
   'help',
@@ -27,19 +39,30 @@ const BOOLEAN_FLAGS = new Set([
   'tabs',
   'raw',
   'strict',
+  'null',
+  'string',
+  'jsonl',
+  'jsonc',
   'no-newline',
   'quiet',
 ]);
 
-const VALUE_FLAGS = new Set(['indent', 'out']);
+const VALUE_FLAGS = new Set(['indent', 'out', 'separator', 'arrays']);
 
-const HELP = `jsonkit - JSON formatieren, prüfen und umbauen
+const HELP = `jsonkit - JSON formatieren, prüfen, abfragen und umbauen
 
 Aufruf:
-  jsonkit format [datei] [--indent N | --tabs] [--sort-keys] [--minify] [-o datei]
-  jsonkit get <pfad> [datei] [--raw] [--minify]
+  jsonkit format [datei] [--indent N | --tabs] [--sort-keys] [--minify] [--jsonl] [--jsonc]
+  jsonkit get <pfad> [datei] [--raw]
   jsonkit map <spec.json> [datei] [--indent N] [--sort-keys] [--strict] [--null] [-o datei]
-  jsonkit validate [datei]
+  jsonkit validate [datei] [--jsonl]
+  jsonkit set <pfad> <wert> [datei] [--string] [-o datei]
+  jsonkit del <pfad> [datei] [-o datei]
+  jsonkit keys [pfad] [datei] [--raw]
+  jsonkit flatten [datei] [--separator .]
+  jsonkit unflatten [datei] [--separator .]
+  jsonkit diff <a.json> <b.json>
+  jsonkit merge <patch.json> [datei] [--arrays replace|concat|merge]
 
 Ohne Datei (oder mit "-") wird von stdin gelesen.
 
@@ -48,9 +71,14 @@ Optionen:
   --tabs          Einrückung mit Tabulatoren
   --sort-keys     Objektschlüssel alphabetisch sortieren
   --minify        Kompakte Ausgabe ohne Zeilenumbrüche
-  --raw           get: Strings/Zahlen ohne JSON-Anführungszeichen
+  --raw           get: Strings/Zahlen ohne Anführungszeichen; keys: eine Zeile pro Schlüssel
   --strict        map: fehlender Pfad ist ein Fehler (sonst weggelassen)
   --null          map: fehlende Pfade als null ausgeben
+  --string        set: Wert unverändert als String übernehmen
+  --jsonl         format/validate: JSON Lines (ein Wert pro Zeile)
+  --jsonc         Kommentare und Trailing Commas erlauben
+  --separator S   flatten/unflatten: Trennzeichen (Standard ".")
+  --arrays MODUS  merge: replace (Standard), concat oder merge
   -o, --out DATEI In Datei statt auf stdout schreiben
   --quiet         Hinweise auf stderr unterdrücken
   -v, --version   Version anzeigen
@@ -60,12 +88,16 @@ Pfade:
   user.name       verschachtelte Schlüssel
   items[0]        Array-Index, auch negativ: items[-1]
   items[*].sku    Wildcard über alle Elemente
+  items[?(@.preis > 10)]   Filter über Array-Elemente
   ["a.b"]         Schlüssel mit Punkten
 
 Beispiele:
   cat daten.json | jsonkit format --indent 4
   jsonkit get 'users[*].name' daten.json --raw
   jsonkit map mapping.json daten.json -o ziel.json
+  jsonkit set user.name "Ada" daten.json -o neu.json
+  jsonkit diff alt.json neu.json
+  cat a.json | jsonkit merge patch.json --arrays concat
 `;
 
 function usageError(message) {
@@ -167,10 +199,25 @@ function loadJson(file, fallbackName = '<stdin>') {
   return parseJson(readInput(file), { filename: file ?? fallbackName });
 }
 
+/** Wie loadJson, berücksichtigt aber --jsonc. */
+function loadLooseJson(file, flags, fallbackName = '<stdin>') {
+  const text = readInput(file);
+  const filename = file ?? fallbackName;
+  return flags.jsonc ? parseJsonc(text, { filename }) : parseJson(text, { filename });
+}
+
 function commandFormat(files, flags) {
   if (files.length > 1) throw usageError('format erwartet höchstens eine Datei');
-  const data = loadJson(files[0]);
+
+  if (flags.jsonl) {
+    const values = parseJsonl(readInput(files[0]), { filename: files[0] ?? '<stdin>' });
+    emit(stringifyJsonl(values, { sortKeys: flags['sort-keys'] === true }), flags);
+    return 0;
+  }
+
+  const data = loadLooseJson(files[0], flags);
   emit(stringifyJson(data, formatOptions(flags)), flags);
+  return 0;
 }
 
 function commandGet(files, flags) {
@@ -178,7 +225,7 @@ function commandGet(files, flags) {
   if (path === undefined) throw usageError('get erwartet einen Pfad, z. B. jsonkit get user.name daten.json');
   if (files.length > 2) throw usageError('get erwartet einen Pfad und höchstens eine Datei');
 
-  const data = loadJson(file);
+  const data = loadLooseJson(file, flags);
   const values = queryPath(data, path);
   if (values.length === 0) {
     process.stderr.write(`jsonkit: Pfad nicht gefunden: ${path}\n`);
@@ -201,8 +248,8 @@ function commandMap(files, flags) {
   if (specFile === undefined) throw usageError('map erwartet eine Spec-Datei, z. B. jsonkit map spec.json daten.json');
   if (files.length > 2) throw usageError('map erwartet eine Spec-Datei und höchstens eine Eingabedatei');
 
-  const spec = loadJson(specFile, '<spec>');
-  const source = loadJson(inputFile);
+  const spec = loadLooseJson(specFile, flags, '<spec>');
+  const source = loadLooseJson(inputFile, flags);
   const onMissing = flags.strict ? 'error' : flags.null ? 'null' : 'omit';
 
   const { value, missing, warnings } = mapDocument(source, spec, { onMissing });
@@ -218,13 +265,185 @@ function commandMap(files, flags) {
 
 function commandValidate(files, flags) {
   if (files.length > 1) throw usageError('validate erwartet höchstens eine Datei');
-  const data = loadJson(files[0]);
+
+  if (flags.jsonl) {
+    const values = parseJsonl(readInput(files[0]), { filename: files[0] ?? '<stdin>' });
+    if (!flags.quiet) process.stdout.write(`gültige JSON-Lines (${values.length} Werte)\n`);
+    return 0;
+  }
+
+  const data = loadLooseJson(files[0], flags);
   if (!flags.quiet) {
     const kind = Array.isArray(data) ? 'Array' : data === null ? 'null' : typeof data;
     process.stdout.write(`gültiges JSON (${kind})\n`);
   }
   return 0;
 }
+
+function parseValue(raw, flags) {
+  if (flags.string) return raw;
+  try {
+    return parseJson(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function commandSet(files, flags) {
+  const [path, rawValue, file] = files;
+  if (path === undefined || rawValue === undefined) {
+    throw usageError('set erwartet einen Pfad und einen Wert, z. B. jsonkit set user.name Ada daten.json');
+  }
+  if (files.length > 3) throw usageError('set erwartet Pfad, Wert und höchstens eine Datei');
+
+  const data = loadLooseJson(file, flags);
+  const updated = setPath(data, path, parseValue(rawValue, flags));
+  emit(stringifyJson(updated, formatOptions(flags)), flags);
+  return 0;
+}
+
+function commandDel(files, flags) {
+  const [path, file] = files;
+  if (path === undefined) throw usageError('del erwartet einen Pfad, z. B. jsonkit del user.telefon daten.json');
+  if (files.length > 2) throw usageError('del erwartet einen Pfad und höchstens eine Datei');
+
+  const data = loadLooseJson(file, flags);
+  emit(stringifyJson(deletePath(data, path), formatOptions(flags)), flags);
+  return 0;
+}
+
+function commandKeys(files, flags) {
+  if (files.length > 2) throw usageError('keys erwartet höchstens Pfad und Datei');
+
+  const [first, second] = files;
+  let pathExpr;
+  let file;
+
+  if (second !== undefined) {
+    [pathExpr, file] = [first, second];
+  } else if (first === undefined || looksLikeFile(first)) {
+    file = first;
+  } else {
+    pathExpr = first;
+  }
+
+  const data = loadLooseJson(file, flags);
+  const target = pathExpr === undefined ? data : queryPath(data, pathExpr)[0];
+  if (target === undefined) {
+    process.stderr.write(`jsonkit: Pfad nicht gefunden: ${pathExpr}\n`);
+    return 1;
+  }
+
+  let keys;
+  if (Array.isArray(target)) keys = target.map((_, index) => index);
+  else if (isPlainObject(target)) keys = Object.keys(target);
+  else {
+    process.stderr.write('jsonkit: keys erwartet ein Objekt oder ein Array\n');
+    return 1;
+  }
+
+  if (flags.raw) {
+    process.stdout.write(keys.map((key) => `${key}\n`).join(''));
+    return 0;
+  }
+  emit(stringifyJson(keys, formatOptions(flags)), flags);
+  return 0;
+}
+
+function separatorOf(flags) {
+  const separator = flags.separator ?? '.';
+  if (separator === '') throw usageError('--separator darf nicht leer sein');
+  return separator;
+}
+
+function commandFlatten(files, flags) {
+  if (files.length > 1) throw usageError('flatten erwartet höchstens eine Datei');
+  const data = loadLooseJson(files[0], flags);
+  emit(stringifyJson(flattenJson(data, { separator: separatorOf(flags) }), formatOptions(flags)), flags);
+  return 0;
+}
+
+function commandUnflatten(files, flags) {
+  if (files.length > 1) throw usageError('unflatten erwartet höchstens eine Datei');
+  const data = loadLooseJson(files[0], flags);
+  emit(stringifyJson(unflattenJson(data, { separator: separatorOf(flags) }), formatOptions(flags)), flags);
+  return 0;
+}
+
+function compact(value) {
+  return value === undefined ? 'undefined' : stringifyJson(value, { indent: 0, trailingNewline: false });
+}
+
+/** Bei einem Argument entscheidet Dateiendung/Existenz, ob es ein Pfad ist. */
+function looksLikeFile(candidate) {
+  if (/\.(json|jsonl|jsonc|ndjson)$/i.test(candidate)) return true;
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function describeChange(change) {
+  switch (change.type) {
+    case 'add':
+      return `+ ${change.path} = ${compact(change.after)}`;
+    case 'remove':
+      return `- ${change.path} = ${compact(change.before)}`;
+    default:
+      return `~ ${change.path}: ${compact(change.before)} -> ${compact(change.after)}`;
+  }
+}
+
+function commandDiff(files, flags) {
+  if (files.length !== 2) throw usageError('diff erwartet zwei Dateien, z. B. jsonkit diff alt.json neu.json');
+
+  const left = loadLooseJson(files[0], flags);
+  const right = loadLooseJson(files[1], flags);
+  const changes = diffJson(left, right);
+
+  if (changes.length === 0) {
+    if (!flags.quiet) process.stderr.write('keine Unterschiede\n');
+    return 0;
+  }
+
+  const lines = changes.map(describeChange);
+  emit(`${lines.join('\n')}\n`, flags);
+  return 1;
+}
+
+function commandMerge(files, flags) {
+  const [patchFile, inputFile] = files;
+  if (patchFile === undefined) throw usageError('merge erwartet eine Patch-Datei, z. B. cat base.json | jsonkit merge patch.json');
+  if (files.length > 2) throw usageError('merge erwartet eine Patch-Datei und höchstens eine Basisdatei');
+
+  const patch = loadLooseJson(patchFile, flags, '<patch>');
+  const base = loadLooseJson(inputFile, flags);
+  const arrays = flags.arrays ?? 'replace';
+  if (!['replace', 'concat', 'merge'].includes(arrays)) {
+    throw usageError(`--arrays erwartet replace, concat oder merge, nicht "${arrays}"`);
+  }
+
+  emit(stringifyJson(mergeJson(base, patch, { arrays }), formatOptions(flags)), flags);
+  return 0;
+}
+
+const COMMANDS = {
+  format: commandFormat,
+  fmt: commandFormat,
+  get: commandGet,
+  map: commandMap,
+  validate: commandValidate,
+  check: commandValidate,
+  set: commandSet,
+  del: commandDel,
+  remove: commandDel,
+  keys: commandKeys,
+  flatten: commandFlatten,
+  unflatten: commandUnflatten,
+  diff: commandDiff,
+  merge: commandMerge,
+};
 
 /**
  * Führt die CLI aus und liefert den Exit-Code.
@@ -248,21 +467,9 @@ export function main(argv = process.argv.slice(2)) {
       return 0;
     }
 
-    switch (command) {
-      case 'format':
-      case 'fmt':
-        commandFormat(files, flags);
-        return 0;
-      case 'get':
-        return commandGet(files, flags);
-      case 'map':
-        return commandMap(files, flags);
-      case 'validate':
-      case 'check':
-        return commandValidate(files, flags);
-      default:
-        throw usageError(`Unbekannter Befehl: ${command}`);
-    }
+    const handler = COMMANDS[command];
+    if (!handler) throw usageError(`Unbekannter Befehl: ${command}`);
+    return handler(files, flags);
   } catch (error) {
     if (error instanceof JsonSyntaxError || error.exitCode !== undefined) {
       process.stderr.write(`jsonkit: ${error.message}\n`);
