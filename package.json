@@ -1,0 +1,34 @@
+{
+  "name": "jsonkit",
+  "version": "0.1.0",
+  "description": "JSON formatieren, validieren, abfragen und über eine Mapping-Spec in eine andere Struktur umbauen - ohne Abhängigkeiten.",
+  "type": "module",
+  "bin": {
+    "jsonkit": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "start": "node src/cli.js",
+    "demo": "node src/cli.js map examples/mapping.json examples/sample.json"
+  },
+  "keywords": [
+    "json",
+    "formatter",
+    "mapper",
+    "cli",
+    "transform",
+    "zero-dependency"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
