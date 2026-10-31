@@ -1,7 +1,7 @@
 {
   "name": "jsonkit",
-  "version": "0.1.0",
-  "description": "JSON formatieren, validieren, abfragen und über eine Mapping-Spec in eine andere Struktur umbauen - ohne Abhängigkeiten.",
+  "version": "0.2.0",
+  "description": "JSON formatieren, validieren, abfragen, per Mapping-Spec umbauen, vergleichen und zusammenführen - ohne Abhängigkeiten.",
   "type": "module",
   "bin": {
     "jsonkit": "src/cli.js"
@@ -12,6 +12,7 @@
   "files": [
     "src",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
