@@ -1,0 +1,24 @@
+{
+  "orderId": "bestellung",
+  "customer": {
+    "from": "kunde",
+    "map": {
+      "firstName": { "path": "vorname", "transform": ["trim"] },
+      "lastName": { "path": "nachname", "transform": "upper" },
+      "email": { "path": "email", "transform": "lower" },
+      "city": "adresse.stadt"
+    }
+  },
+  "items": {
+    "from": "positionen",
+    "each": {
+      "sku": "sku",
+      "label": "bezeichnung",
+      "price": { "path": "preis", "transform": ["number"] },
+      "total": { "path": "preis", "transform": ["number"] }
+    }
+  },
+  "tags": { "path": "tags", "transform": ["unique", "sort"] },
+  "createdAt": { "path": "erstellt", "transform": "isodate" },
+  "channel": { "path": "quelle", "default": "web" }
+}

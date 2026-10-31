@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Versionen
+        run: |
+          node --version
+          npm --version
+
+      - name: Syntaxcheck
+        run: |
+          for file in src/*.js; do node --check "$file"; done
+
+      - name: Tests
+        run: npm test
+
+      - name: CLI-Smoke-Test
+        run: |
+          echo '{"b":1,"a":2}' | node src/cli.js format --sort-keys
+          node src/cli.js map examples/mapping.json examples/sample.json > /dev/null
+          node src/cli.js validate examples/sample.json

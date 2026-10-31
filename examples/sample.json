@@ -1,0 +1,16 @@
+{
+  "bestellung": "B-2026-0042",
+  "kunde": {
+    "vorname": "  Ada ",
+    "nachname": "Lovelace",
+    "email": "ADA@example.com",
+    "adresse": { "strasse": "Analytical Engine Way 1", "stadt": "London", "land": "UK" }
+  },
+  "positionen": [
+    { "sku": "TEA-01", "bezeichnung": "Earl Grey", "preis": "7.50", "menge": 2 },
+    { "sku": "MUG-07", "bezeichnung": "Porzellantasse", "preis": "12.00", "menge": 1 }
+  ],
+  "tags": ["express", "express", "geschenk"],
+  "erstellt": "2026-10-31T09:15:00Z",
+  "intern": { "kostenstelle": "42" }
+}
