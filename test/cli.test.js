@@ -111,3 +111,93 @@ test('fehlende Datei wird verständlich gemeldet', () => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Datei nicht gefunden/);
 });
+
+test('set schreibt Werte im JSON-Typ und legt Pfade an', () => {
+  assert.equal(run(['set', 'a.b', '42', '--minify'], '{"a":{}}').stdout, '{"a":{"b":42}}');
+  assert.equal(run(['set', 'a.b', 'true', '--minify'], '{}').stdout, '{"a":{"b":true}}');
+  assert.equal(run(['set', 'a.b', 'Ada', '--minify'], '{}').stdout, '{"a":{"b":"Ada"}}');
+  assert.equal(run(['set', 'liste[1]', 'x', '--minify'], '{"liste":[1,2]}').stdout, '{"liste":[1,"x"]}');
+});
+
+test('set --string erhält den Wert als String', () => {
+  assert.equal(run(['set', 'a', '42', '--string', '--minify'], '{}').stdout, '{"a":"42"}');
+});
+
+test('del entfernt Schlüssel und Array-Elemente', () => {
+  assert.equal(run(['del', 'a.b', '--minify'], '{"a":{"b":1,"c":2}}').stdout, '{"a":{"c":2}}');
+  assert.equal(run(['del', 'a[0]', '--minify'], '{"a":[1,2]}').stdout, '{"a":[2]}');
+});
+
+test('keys listet Schlüssel und Indizes', () => {
+  assert.equal(run(['keys', '--minify'], '{"b":1,"a":2}').stdout, '["b","a"]');
+  assert.equal(run(['keys', 'liste', '--raw'], '{"liste":["x","y"]}').stdout, '0\n1\n');
+  assert.equal(run(['keys', 'skalar'], '{"skalar":1}').status, 1);
+});
+
+test('get unterstützt Filter-Ausdrücke', () => {
+  const input = '{"p":[{"sku":"A","n":2},{"sku":"B","n":1}]}';
+  assert.equal(run(['get', 'p[?(@.n > 1)].sku', '--raw'], input).stdout, 'A\n');
+});
+
+test('flatten und unflatten sind über die CLI invers', () => {
+  const input = '{"a":{"b":[1,2]}}';
+  const flat = run(['flatten', '--minify'], input).stdout;
+  assert.equal(flat, '{"a.b.0":1,"a.b.1":2}');
+  assert.equal(run(['unflatten', '--minify'], flat).stdout, input);
+});
+
+test('flatten akzeptiert ein eigenes Trennzeichen', () => {
+  assert.equal(run(['flatten', '--separator', '/', '--minify'], '{"a":{"b":1}}').stdout, '{"a/b":1}');
+});
+
+test('diff meldet Unterschiede und liefert Exit-Code 1', () => withTempDir((dir) => {
+  const left = join(dir, 'links.json');
+  const right = join(dir, 'rechts.json');
+  writeFileSync(left, '{"a":1,"b":2}');
+  writeFileSync(right, '{"a":1,"b":3,"c":true}');
+
+  const result = run(['diff', left, right], '');
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /~ \$\.b: 2 -> 3/);
+  assert.match(result.stdout, /\+ \$\.c = true/);
+}));
+
+test('diff ohne Unterschiede liefert Exit-Code 0', () => withTempDir((dir) => {
+  const left = join(dir, 'links.json');
+  const right = join(dir, 'rechts.json');
+  writeFileSync(left, '{"a":1,"b":[1,2]}');
+  writeFileSync(right, '{"b":[1,2],"a":1}');
+
+  const result = run(['diff', left, right], '');
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /keine Unterschiede/);
+}));
+
+test('merge führt Basis und Patch zusammen', () => {
+  return withTempDir((dir) => {
+    const patchFile = join(dir, 'patch.json');
+    writeFileSync(patchFile, '{"b":"neu","liste":[3]}');
+    const result = run(['merge', patchFile, '--arrays', 'concat', '--minify'], '{"a":1,"liste":[1,2]}');
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, '{"a":1,"liste":[1,2,3],"b":"neu"}');
+  });
+});
+
+test('format --jsonc erlaubt Kommentare und Trailing Commas', () => {
+  const input = '{ // x\n "a": 1, /* y */\n}\n';
+  const result = run(['format', '--jsonc', '--minify'], input);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '{"a":1}');
+});
+
+test('format --jsonl schreibt eine Zeile pro Wert', () => {
+  const result = run(['format', '--jsonl', '--sort-keys'], '{"b":1,"a":2}\n{"a":3}');
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, '{"a":2,"b":1}\n{"a":3}\n');
+});
+
+test('validate --jsonl zählt die Werte', () => {
+  const result = run(['validate', '--jsonl'], '{"a":1}\n{"a":2}\n');
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /2 Werte/);
+});
