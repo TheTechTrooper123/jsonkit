@@ -43,7 +43,7 @@ test('parsePath unterstützt Schlüssel mit Punkten in Klammern', () => {
 test('parsePath lehnt kaputte Ausdrücke ab', () => {
   assert.throws(() => parsePath('a['), /Fehlende schließende Klammer/);
   assert.throws(() => parsePath('a[]'), /Ungültiger Ausdruck/);
-  assert.throws(() => parsePath('a[?]'), /Ungültiger Ausdruck/);
+  assert.throws(() => parsePath('a[?]'), /Ungültiger Filter/);
   assert.throws(() => parsePath('$x'), /"\$" muss/);
 });
 
